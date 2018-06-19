@@ -5,7 +5,9 @@
     API Doc: https://kucoinapidocs.docs.apiary.io
 '''
 
-
+######
+# Trade in BTC market
+######
 import base64
 import hashlib
 import hmac
@@ -48,7 +50,7 @@ def auth_header(endpoint, query_str):
 def get_balance(symbol):
     endpoint = '/v1/account/' + symbol + '/balance'
     query_str = ''
-    r = requests.get(host + endpoint, headers=auth_header(endpoint, query_str))
+    r = requests.get(host + endpoint + query_str, headers=auth_header(endpoint, query_str))
     return r.json()['data']['balance']
 
 
@@ -110,6 +112,7 @@ def input_module():
     limit_sell_price_base = limit_sell_price_base.upper()
     limit_sell_price = input('>> What\'s your limit price for SELLING? (in %s) ' %limit_sell_price_base)
     limit_sell_price = float(limit_sell_price)
+    print('>> Querying Kucoin...')
 
     limit_usd = base_price_convertor(limit_sell_price_base, limit_sell_price)['usd']
     limit_eth = base_price_convertor(limit_sell_price_base, limit_sell_price)['eth']
@@ -132,7 +135,7 @@ def input_module():
 
     # integrate input into json and pass to execution
     initialization_json = {
-        'cPair': cPair,
+        'cPair': quote_currency + '-' + base_currency,
         'quote_currency': quote_currency,
         'base_currency': base_currency,
         'sell_amount': sell_amount,
@@ -172,24 +175,62 @@ def base_price_convertor(base_currency, base_price):
 
 
 # Get info on highest BID and lowest ASK
-def get_mid_orderbook(cPair):
-    r = requests.get(host + '/public/orderbook/' + cPair + '?limit=1')
+def get_highest_bid(quote_crypto, base_crypto):
+    r = requests.get(host + '/v1/open/orders-buy?symbol=' + quote_crypto + '-' + base_crypto)
+    bid_json = {
+        'price': r.json()['data'][0][0],
+        'amount': r.json()['data'][0][1],
+        'volume_in_base_crypto': r.json()['data'][0][2]
+    }
+    return bid_json
+
+
+# Place limit order for the highest bid, if it's in our favour
+def place_limit_order(cPair, side, price, amount):
+    endpoint = '/v1/'+cPair+'/order'
+    data = {'type':side, 'amount':amount, 'price':price}
+    query_str = 'amount=' + str(amount) + '&price=' + str(price) + '&type=' + side
+    r = requests.post(host + endpoint, params=data, headers=auth_header(endpoint, query_str))
     return r.json()
 
 
 # Execute trades within single function
+'''
+    config_json = {
+        'cPair': cPair,
+        'quote_currency': quote_currency,
+        'base_currency': base_currency,
+        'sell_amount': sell_amount,
+        'price_base': limit_sell_price_base,
+        'limit_price': limit_sell_price,
+        'time_gap': time_gap
+    }
+'''
 def trade_execution(initialization_json):
     print('\n--- Trading Starts ---\n')
-    print(initialization_json)
+    config_json = initialization_json
+    sold_amount = 0.0
+    while sold_amount < config_json['sell_amount']:
+        limit_btc_price = float(base_price_convertor(config_json['price_base'], config_json['limit_price'])['btc'])
+        # limit_eth_price = base_price_convertor(config_json['price_base'], config_json['limit_price'])['eth']
+        trade_pair = config_json['quote_currency'] + '-' + 'BTC'
+
+        highest_bid = get_highest_bid(config_json['quote_currency'], 'BTC')
+
+        highest_bid_price = float(highest_bid['price'])
+        highest_bid_amount = float(highest_bid['amount'])
+        highest_bid_volume_in_base_crypto = float(highest_bid['volume_in_base_crypto'])
+
+        if limit_btc_price <= highest_bid_price:
+            if highest_bid_volume_in_base_crypto <= 0.1:
+                place_limit_order(trade_pair, 'SELL', highest_bid_price, highest_bid_amount)
+                sold_amount += highest_bid_amount
+            else:
+                max_amount = (0.1 / highest_bid_volume_in_base_crypto) * highest_bid_amount
+                place_limit_order(trade_pair, 'SELL', highest_bid_price, max_amount)
+                sold_amount += max_amount
+            time.sleep(config_json['time_gap'])
+
 
 # Main
-initialization_json = {
-    'cPair': '',
-    'quote_currency': '',
-    'base_currency': '',
-    'sell_amount': '',
-    'price_base': '',
-    'limit_price': '',
-    'time_gap': ''
-}
 trade_execution(input_module())
