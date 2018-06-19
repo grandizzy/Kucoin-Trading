@@ -5,9 +5,6 @@
     API Doc: https://kucoinapidocs.docs.apiary.io
 '''
 
-######
-# Trade in BTC market
-######
 import base64
 import hashlib
 import hmac
@@ -191,7 +188,11 @@ def place_limit_order(cPair, side, price, amount):
     data = {'type':side, 'amount':amount, 'price':price}
     query_str = 'amount=' + str(amount) + '&price=' + str(price) + '&type=' + side
     r = requests.post(host + endpoint, params=data, headers=auth_header(endpoint, query_str))
-    return r.json()
+    result_json = {
+        'order_id': r.json()['data']['orderOid'],
+        'timestamp': r.json()['timestamp']
+    }
+    return
 
 
 # Execute trades within single function
@@ -212,23 +213,39 @@ def trade_execution(initialization_json):
     sold_amount = 0.0
     while sold_amount < config_json['sell_amount']:
         limit_btc_price = float(base_price_convertor(config_json['price_base'], config_json['limit_price'])['btc'])
-        # limit_eth_price = base_price_convertor(config_json['price_base'], config_json['limit_price'])['eth']
-        trade_pair = config_json['quote_currency'] + '-' + 'BTC'
-
-        highest_bid = get_highest_bid(config_json['quote_currency'], 'BTC')
+        limit_eth_price = float(base_price_convertor(config_json['price_base'], config_json['limit_price'])['eth'])
+        trade_pair = config_json['quote_currency'] + '-' + config_json['base_currency']
+        if config_json['base_currency'] == 'BTC':
+            san = 0.1
+            limit_crypto_price = limit_btc_price
+        elif config_json['base_currency'] == 'ETH':
+            san = 1
+            limit_crypto_price = limit_eth_price
+        else:
+            exit('Error: invalid base_currency!')
+            
+        highest_bid = get_highest_bid(config_json['quote_currency'], config_json['base_currency'])
 
         highest_bid_price = float(highest_bid['price'])
         highest_bid_amount = float(highest_bid['amount'])
         highest_bid_volume_in_base_crypto = float(highest_bid['volume_in_base_crypto'])
 
-        if limit_btc_price <= highest_bid_price:
-            if highest_bid_volume_in_base_crypto <= 0.1:
-                place_limit_order(trade_pair, 'SELL', highest_bid_price, highest_bid_amount)
+        if limit_crypto_price <= highest_bid_price:
+            if highest_bid_volume_in_base_crypto <= san:
+                execution = place_limit_order(trade_pair, 'SELL', highest_bid_price, highest_bid_amount)
+                order_sold_amount = highest_bid_amount
                 sold_amount += highest_bid_amount
             else:
-                max_amount = (0.1 / highest_bid_volume_in_base_crypto) * highest_bid_amount
-                place_limit_order(trade_pair, 'SELL', highest_bid_price, max_amount)
+                max_amount = (san / highest_bid_volume_in_base_crypto) * highest_bid_amount
+                execution = place_limit_order(trade_pair, 'SELL', highest_bid_price, max_amount)
+                order_sold_amount = max_amount
                 sold_amount += max_amount
+
+            order_id = execution['order_id']
+            timestamp = execution['timestamp']
+            print('Order: %s\nTimestamp: %s\nOrder Sold Amount: %s\nTotal Sold Amount: %s\n'
+                  %(order_id, timestamp, order_sold_amount, sold_amount))
+            
             time.sleep(config_json['time_gap'])
 
 
